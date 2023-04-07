@@ -13,9 +13,7 @@ from utils.general import make_divisible, check_file, set_logging
 from utils.torch_utils import time_synchronized, fuse_conv_and_bn, model_info, scale_img, initialize_weights, \
     select_device, copy_attr
 from utils.loss import SigmoidBin
-import warnings
 
-warnings.filterwarnings('ignore')
 try:
     import thop  # for FLOPS computation
 except ImportError:
@@ -94,7 +92,7 @@ class Detect(nn.Module):
                                            device=z.device)
         box @= convert_matrix                          
         return (box, score)
-ini = 1
+
 
 class IDetect(nn.Module):
     stride = None  # strides computed during build
@@ -120,19 +118,9 @@ class IDetect(nn.Module):
 
     def forward(self, x):
         # x = x.copy()  # for profiling
-        #print('yh_debug_detect', len(x), self.nl, x[0].shape)
-        w, h = x[0].shape[2]*8, x[0].shape[3]*8
-        mh = torch.max(torch.tensor([w,h]))
-        
-        temp = self.nl
-        '''if(960<mh<1920):
-            temp = 4
-        if(mh<=960):
-            temp = 3'''
-        #print(mh, temp)
         z = []  # inference output
         self.training |= self.export
-        for i in range(temp):
+        for i in range(self.nl):
             x[i] = self.m[i](self.ia[i](x[i]))  # conv
             x[i] = self.im[i](x[i])
             bs, _, ny, nx = x[i].shape  # x(bs,255,20,20) to x(bs,3,20,20,85)
@@ -344,7 +332,6 @@ class IAuxDetect(nn.Module):
         self.im = nn.ModuleList(ImplicitM(self.no * self.na) for _ in ch[:self.nl])
 
     def forward(self, x):
-        print('debug_IAuxDetect', len(x), x[0].shape)
         # x = x.copy()  # for profiling
         z = []  # inference output
         self.training |= self.export
@@ -543,7 +530,6 @@ class Model(nn.Module):
         # print([x.shape for x in self.forward(torch.zeros(1, ch, 64, 64))])
 
         # Build strides, anchors
-        self.ini = 1
         m = self.model[-1]  # Detect()
         if isinstance(m, Detect):
             s = 256  # 2x min stride
@@ -554,9 +540,8 @@ class Model(nn.Module):
             self._initialize_biases()  # only run once
             # print('Strides: %s' % m.stride.tolist())
         if isinstance(m, IDetect):
-            s = 2560  # 2x min stride
+            s = 256  # 2x min stride
             m.stride = torch.tensor([s / x.shape[-2] for x in self.forward(torch.zeros(1, ch, s, s))])  # forward
-            #print('debug_stride',m.stride.shape)
             check_anchor_order(m)
             m.anchors /= m.stride.view(-1, 1, 1)
             self.stride = m.stride
@@ -564,7 +549,7 @@ class Model(nn.Module):
             # print('Strides: %s' % m.stride.tolist())
         if isinstance(m, IAuxDetect):
             s = 256  # 2x min stride
-            m.stride = torch.tensor([s / x.shape[-2] for x in self.forward(torch.zeros(1, ch, s, s))[:5]])  # forward
+            m.stride = torch.tensor([s / x.shape[-2] for x in self.forward(torch.zeros(1, ch, s, s))[:4]])  # forward
             #print(m.stride)
             check_anchor_order(m)
             m.anchors /= m.stride.view(-1, 1, 1)
@@ -592,7 +577,6 @@ class Model(nn.Module):
         initialize_weights(self)
         self.info()
         logger.info('')
-        #print('self.save', self.save)
 
     def forward(self, x, augment=False, profile=False):
         if augment:
@@ -615,56 +599,10 @@ class Model(nn.Module):
             return self.forward_once(x, profile)  # single-scale inference, train
 
     def forward_once(self, x, profile=False):
-        y, dt = [], []  # outputs 
-        i = -1
-        w, h = x.shape[2], x.shape[3]
-        #mh = torch.max(torch.tensor([w,h]))
-        mh = max(w, h)
-        #print(mh)
+        y, dt = [], []  # outputs
         for m in self.model:
-            i += 1
-            #print('yh_debug_model', m.f, i, x.shape, mh)
-            #print('self.save', self.save)
-            
-            temp2 = m.f
-            '''if(960<mh<1920):
-                print('enter 4')
-                #if(47 < i < 59):
-                #    y.append(x if m.i in self.save else None)
-                #    continue
-                #if(i == 60):
-                #    temp2 = [-1, -1]
-                if(134< i < 145):
-                    y.append(x if m.i in self.save else None)
-                    continue
-                if(i == 149):
-                    y.append(x if m.i in self.save else None)
-                    continue
-                if(i == 150):
-                    temp2 = [145,146,147,148]
-            if(mh<=960):
-                print('enter 3')
-                #if(38 < i < 71):
-                #    y.append(x if m.i in self.save else None)
-                #    continue
-                #if(i == 72):
-                #    temp2 = [-1, -1]
-                if(124< i < 145):
-                    y.append(x if m.i in self.save else None)
-                    continue
-                if(i == 148):
-                    y.append(x if m.i in self.save else None)
-                    continue
-                if(i == 149):
-                    y.append(x if m.i in self.save else None)
-                    continue
-                if(i == 150):
-                    temp2 = [145,146,147]'''
-                        
-            if temp2 != -1:  # if not from previous layer
-                x = y[temp2] if isinstance(temp2, int) else [x if j == -1 else y[j] for j in temp2]  # from earlier layers
-                #for j in m.f:
-                #print(y)
+            if m.f != -1:  # if not from previous layer
+                x = y[m.f] if isinstance(m.f, int) else [x if j == -1 else y[j] for j in m.f]  # from earlier layers
 
             if not hasattr(self, 'traced'):
                 self.traced=False
@@ -683,6 +621,7 @@ class Model(nn.Module):
                     m(x.copy() if c else x)
                 dt.append((time_synchronized() - t) * 100)
                 print('%10.1f%10.0f%10.1fms %-40s' % (o, m.np, dt[-1], m.type))
+
             x = m(x)  # run
             
             y.append(x if m.i in self.save else None)  # save output
@@ -849,7 +788,6 @@ def parse_model(d, ch):  # model_dict, input_channels(3)
         elif m is Foldcut:
             c2 = ch[f] // 2
         elif m in [Detect, IDetect, IAuxDetect, IBin, IKeypoint]:
-            print(f, len(ch), ch)
             args.append([ch[x] for x in f])
             if isinstance(args[1], int):  # number of anchors
                 args[1] = [list(range(args[1] * 2))] * len(f)

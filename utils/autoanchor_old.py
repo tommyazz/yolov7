@@ -5,7 +5,7 @@ import torch
 import yaml
 from scipy.cluster.vq import kmeans
 from tqdm import tqdm
-import random
+
 from utils.general import colorstr
 
 
@@ -25,18 +25,7 @@ def check_anchors(dataset, model, thr=4.0, imgsz=640):
     prefix = colorstr('autoanchor: ')
     print(f'\n{prefix}Analyzing anchors... ', end='')
     m = model.module.model[-1] if hasattr(model, 'module') else model.model[-1]  # Detect()
-    
-    #shapes = imgsz * dataset.shapes / dataset.shapes.max(1, keepdims=True)
-    temp_shape = dataset.shapes
-    for i in range(len(temp_shape)):
-        #print(temp_shape[i])
-        temp = random.randint(0,2)
-        if(temp % 3) == 0:
-            temp_shape[i] = temp_shape[i]*4
-        elif(temp % 3) == 1:
-            temp_shape[i] = temp_shape[i]*2
-    #print('debug_autoanchor', temp_shape)
-    shapes = temp_shape
+    shapes = imgsz * dataset.shapes / dataset.shapes.max(1, keepdims=True)
     scale = np.random.uniform(0.9, 1.1, size=(shapes.shape[0], 1))  # augment scale
     wh = torch.tensor(np.concatenate([l[:, 3:5] * s for s, l in zip(shapes * scale, dataset.labels)])).float()  # wh
 
@@ -55,7 +44,7 @@ def check_anchors(dataset, model, thr=4.0, imgsz=640):
         print('. Attempting to improve anchors, please wait...')
         na = m.anchor_grid.numel() // 2  # number of anchors
         try:
-            anchors = kmean_anchors(dataset, n=na, img_size=imgsz, thr=thr, gen=1000, verbose=False, temp_shape=temp_shape)
+            anchors = kmean_anchors(dataset, n=na, img_size=imgsz, thr=thr, gen=1000, verbose=False)
         except Exception as e:
             print(f'{prefix}ERROR: {e}')
         new_bpr = metric(anchors)[0]
@@ -70,7 +59,7 @@ def check_anchors(dataset, model, thr=4.0, imgsz=640):
     print('')  # newline
 
 
-def kmean_anchors(path='./data/coco.yaml', n=9, img_size=640, thr=4.0, gen=1000, verbose=True, temp_shape=None):
+def kmean_anchors(path='./data/coco.yaml', n=9, img_size=640, thr=4.0, gen=1000, verbose=True):
     """ Creates kmeans-evolved anchors from training dataset
 
         Arguments:
@@ -120,8 +109,7 @@ def kmean_anchors(path='./data/coco.yaml', n=9, img_size=640, thr=4.0, gen=1000,
         dataset = path  # dataset
 
     # Get label wh
-    #shapes = img_size * dataset.shapes / dataset.shapes.max(1, keepdims=True)
-    shapes = temp_shape
+    shapes = img_size * dataset.shapes / dataset.shapes.max(1, keepdims=True)
     wh0 = np.concatenate([l[:, 3:5] * s for s, l in zip(shapes, dataset.labels)])  # wh
 
     # Filter
